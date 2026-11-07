@@ -1,0 +1,55 @@
+# Adapted from lutaml/lutaml-model's release.yml (CIMAS-generated upstream).
+name: release
+
+on:
+  workflow_dispatch:
+    inputs:
+      next_version:
+        description: |
+          Next release version. Possible values: x.y.z, major, minor, patch or pre|rc|etc
+        required: true
+        default: 'skip'
+  repository_dispatch:
+    types: [ do-release ]
+
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    uses: metanorma/ci/.github/workflows/rubygems-release.yml@main
+    with:
+      next_version: ${{ github.event.inputs.next_version }}
+    secrets:
+      # OMIT rubygems-api-key: metanorma/ci switches to OIDC Trusted Publishing
+      # when the secret is empty. NOTE: OIDC requires THIS gem to have a
+      # trusted publisher registered on rubygems.org (gem owner -> API keys ->
+      # Push new gem version using OIDC: owner=lutaml, repo=lutaml-graphviz,
+      # workflow=release.yml). Until registered, releases fail the preflight —
+      # publish manually (gem build && gem push) for the first cut.
+      pat_token: ${{ secrets.LUTAML_CI_PAT_TOKEN }}
+
+  smoke:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 5
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.4"
+      - name: Resolve the released version
+        id: version
+        run: |
+          git pull --ff-only origin main
+          echo "version=$(ruby -e 'print File.read(%q{lib/lutaml/graphviz/version.rb})[/VERSION\s*=\s*"([^"]+)"/, 1]')" >> "$GITHUB_OUTPUT"
+      - name: Install and smoke the released gem
+        run: |
+          gem install "lutaml-graphviz:${{ steps.version.outputs.version }}" --no-document
+          ruby -e 'require "lutaml/graphviz"; puts Lutaml::Graphviz::VERSION'
